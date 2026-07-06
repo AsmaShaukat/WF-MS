@@ -45,6 +45,7 @@ CORS_ALLOW_HEADERS = [
     'content-type',
     'x-grade-id',  
     'authorization',
+    'x-erp-id',
 ]
 
 INSTALLED_APPS = [

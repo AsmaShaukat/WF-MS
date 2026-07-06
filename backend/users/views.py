@@ -182,6 +182,8 @@ class UsersView:
                 'grade_id', flat=True).first()
             section = Employees.objects.filter(erp_id=erpid).values_list(
             'section_id', flat=True).first()
+            sub_section = Employees.objects.filter(erp_id=erpid).values_list(
+            'sub_section_id', flat=True).first()
 
 
             if erpid is not None:
@@ -200,6 +202,7 @@ class UsersView:
                     'is_superuser': user.is_superuser,
                     'expires': (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=getattr(settings, "JWT_EXP_DELTA_SECONDS", 3600))).isoformat(),
                     'section_id': section, # Add Section Id
+                    'sub_section_id': sub_section, # Add Sub-Section Id (BP module scoping ke liye)
                 }
                 token = jwt.encode(
                     payload, settings.SECRET_KEY, algorithm='HS256')

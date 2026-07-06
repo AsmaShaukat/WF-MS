@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import PageMeta from "../../components/common/PageMeta";
 import PageBreadcrumb from "../../components/common/PageBreadCrumb";
 import ComponentCard from "../../components/common/ComponentCard";
@@ -19,12 +20,18 @@ interface BPRow {
   task: string;
   start_date: string;
   end_date: string;
-  lead_team: string;
+  lead_team_id: number | null;
   lead_team_name?: string;
   support_team: string;
   dependencies: string;
   deliverables: string;
   completion_pct: number;
+  created_by: number;
+}
+
+interface SubSectionOption {
+  id: number;
+  sub_section_name: string;
 }
 
 interface NewRow {
@@ -36,7 +43,7 @@ interface NewRow {
   task: string;
   start_date: string;
   end_date: string;
-  lead_team: string;
+  lead_team_id: string; // select value ke liye string, submit se pehle number banega
   support_team: string;
   dependencies: string;
   deliverables: string;
@@ -45,8 +52,6 @@ interface NewRow {
 /* ═══════════════════════════════════════
 CONSTANTS
 ═══════════════════════════════════════ */
-const ADMIN_GRADES = [9, 10, 11];
-
 const indentClass = (level: number) => {
   if (level === 1) return "pl-8";
   if (level === 2) return "pl-16";
@@ -59,24 +64,123 @@ const newInp = "w-full border border-green-400 rounded px-1.5 py-1 text-xs bg-gr
 /* ═══════════════════════════════════════
 EXCEL UPLOAD COMPONENT
 ═══════════════════════════════════════ */
+function BusinessPlanTemplateGuide({ isAdminAccess }: { isAdminAccess: boolean }) {
+  const [open, setOpen] = useState(false);
+
+  if (!isAdminAccess) return null; // Sirf grade-9 head / grade 10,11 / superuser ko dikhta hai
+
+  const downloadTemplate = () => {
+    const headers = [
+      "sr_number", "section_id", "task", "start_date", "end_date",
+      "lead_team", "support_team", "dependencies", "deliverables",
+      "level", "parent_sr",
+    ];
+    const exampleRows = [
+      ["T-IT-01", 7, "Upgrade network infrastructure", "2026-01-01", "2026-06-30", "DPC", "Vendor A, Vendor B", "Budget approval", "New switches installed", 0, ""],
+      ["T-IT-01-01", 7, "Procure new switches", "2026-01-01", "2026-02-15", "DPC", "Procurement team", "Budget approval", "Purchase order signed", 1, "T-IT-01"],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...exampleRows]);
+    ws["!cols"] = headers.map(() => ({ wch: 22 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Business Plan Template");
+    XLSX.writeFile(wb, "Business_Plan_Template.xlsx");
+  };
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="w-full sm:w-auto flex items-center justify-center gap-2
+px-4 py-2 bg-teal-700 hover:bg-teal-800 active:bg-teal-900
+text-white text-xs sm:text-sm font-semibold rounded-lg transition"
+      >
+        📋 Business Plan Template
+      </button>
+
+      {open && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 p-4 pt-24 overflow-y-auto">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700 shrink-0">
+              <h3 className="text-base font-semibold text-gray-800 dark:text-gray-100">How to create your Business Plan Excel file</h3>
+              <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-2xl leading-none">×</button>
+            </div>
+
+            <div className="px-5 py-4 text-sm text-gray-700 dark:text-gray-300 space-y-4 overflow-y-auto">
+              <p>
+                Use the template below to prepare your Business Plan. Fill one row per task.
+                The first row (header) must stay exactly as it is — do not rename, remove, or reorder the columns.
+              </p>
+
+              <div>
+                <p className="font-semibold text-gray-800 dark:text-gray-100 mb-1">Column guide:</p>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li><b>sr_number</b> — A unique code for this task, e.g. <code>T-IT-01</code> for a main task, and <code>T-IT-01-01</code> for its first sub-task. This must be unique — do not reuse a number that already exists.</li>
+                  <li><b>section_id</b> — The numeric ID of your section. Leave it as your own section's ID unless you manage more than one section.</li>
+                  <li><b>task</b> — A short, clear description of the task.</li>
+                  <li><b>start_date</b> and <b>end_date</b> — Use the format <code>YYYY-MM-DD</code> (e.g. 2026-01-31). A sub-task's dates must fall within its parent task's date range.</li>
+                  <li><b>lead_team</b> — The name of the sub-section responsible for this task (e.g. "DPC"). You may also use the sub-section's numeric ID instead of its name.</li>
+                  <li><b>support_team</b>, <b>dependencies</b>, <b>deliverables</b> — Free text, optional.</li>
+                  <li><b>level</b> — <code>0</code> for a main task, <code>1</code> for a sub-task, <code>2</code> for a sub-sub-task.</li>
+                  <li><b>parent_sr</b> — The sr_number of the parent task. Leave this empty for a main task (level 0).</li>
+                </ul>
+              </div>
+
+              <div>
+                <p className="font-semibold text-gray-800 dark:text-gray-100 mb-1">A few important rules:</p>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li>Every sr_number must be unique within your section and sub-section.</li>
+                  <li>A sub-task's start and end dates must be inside its parent task's date range — not before the parent starts, and not after the parent ends.</li>
+                  <li>If a row's sr_number already exists in the system, that row will be skipped when you upload (it will not overwrite existing data).</li>
+                  <li>If you are a sub-section head, you can only upload tasks for the sub-section(s) you head — rows for other sub-sections will be skipped.</li>
+                </ul>
+              </div>
+
+              <p className="text-gray-500 dark:text-gray-400 text-xs">
+                Once your file is ready, close this window and use the "Upload Excel" option to import it.
+              </p>
+            </div>
+
+            <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2 shrink-0">
+              <button
+                onClick={() => setOpen(false)}
+                className="px-4 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+              >
+                Close
+              </button>
+              <button
+                onClick={downloadTemplate}
+                className="px-4 py-2 text-sm rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-medium"
+              >
+                ⬇ Download Excel Template
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
+  );
+}
+
 function ExcelUpload({
   onUploadSuccess,
   erpid,
   gradeId,
   sectionId,
   isSuperuser,
+  isAdminAccess,
 }: {
   onUploadSuccess: () => void;
   erpid: number;
   gradeId: number;
   sectionId: number;
   isSuperuser: boolean;
+  isAdminAccess: boolean; // superuser / grade 10,11 / grade-9 sub-section-head (server-verified)
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-  const isAdmin = ADMIN_GRADES.includes(gradeId);
 
   const handleUpload = async () => {
     if (!file) { toast.error("Select file first!"); return; }
@@ -88,7 +192,7 @@ function ExcelUpload({
     setUploading(true);
     try {
       const res = await axios.post("/businessplan/upload/", formData, {
-        headers: { "Content-Type": "multipart/form-data", "X-Grade-Id": String(gradeId) },
+        headers: { "Content-Type": "multipart/form-data", "X-Grade-Id": String(gradeId), "X-Erp-Id": String(erpid) },
       });
       toast.success(`${res.data.rows_created} rows imported successfully!`);
       setFile(null);
@@ -105,8 +209,8 @@ function ExcelUpload({
     if (!window.confirm("Could you want to delete all Business Plan? This is not undo action!")) return;
     setDeleting(true);
     try {
-      await axios.delete(`/businessplan/delete-all/?is_superuser=${isSuperuser}`, {
-        headers: { "X-Grade-Id": String(gradeId) },
+      await axios.delete(`/businessplan/delete-all/?is_superuser=${isSuperuser}&section_id=${sectionId}`, {
+        headers: { "X-Grade-Id": String(gradeId), "X-Erp-Id": String(erpid) },
       });
       toast.success("Poora Business Plan delete ho gaya!");
       onUploadSuccess();
@@ -117,7 +221,7 @@ function ExcelUpload({
     }
   };
 
-  if (!isAdmin) return null; // Non-admin ko upload section dikhe hi nahi
+  if (!isAdminAccess) return null; // Non-admin (grade 1-9 non-head) ko upload section dikhe hi nahi
 
   return (
     <div className="flex flex-wrap items-center gap-3 p-4 bg-white border border-gray-200 rounded-xl mb-4">
@@ -170,20 +274,34 @@ BP TABLE COMPONENT
 function BPTable({
   data,
   gradeId,
+  erpid,
   sectionId,
   isSuperuser,
+  isAdminAccess,
+  scopeType,
+  subSectionOptions,
+  ownSubSection,
   onRefresh,
 }: {
   data: BPRow[];
   gradeId: number;
+  erpid: number;
   sectionId: number;
   isSuperuser: boolean;
+  isAdminAccess: boolean; // superuser / grade 10,11 / grade-9 sub-section-head (server-verified)
+  scopeType: string; // 'all' | 'section' | 'subsections' | 'own' | 'none'
+  subSectionOptions: SubSectionOption[]; // head/admin ke liye lead-team dropdown options (ID-based)
+  ownSubSection: SubSectionOption | null; // regular employee ki apni sub-section (read-only)
   onRefresh: () => void;
 }) {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editData, setEditData] = useState<Partial<BPRow>>({});
   const [newRow, setNewRow] = useState<NewRow | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Grade 1-9 (non-head) sirf apni khud ki banayi hui row edit/delete kar sakte hain.
+  // Admin-tier (superuser / grade 10,11 / grade-9 head) ko full access hai.
+  const canModify = (row: BPRow) => isAdminAccess || row.created_by === erpid;
 
   // Section groups
   const sectionGroups: Record<string, BPRow[]> = {};
@@ -192,36 +310,6 @@ function BPTable({
     if (!sectionGroups[key]) sectionGroups[key] = [];
     sectionGroups[key].push(row);
   });
-
-  // Helper: get parent section's lead_team options for a sub-row
-  const getParentLeadTeamOptions = (row: BPRow): string[] => {
-    // Try parent_sr first, else derive from sr_number (e.g. "T-SO-01-01" -> "T-SO-01")
-    let parentSr = row.parent_sr;
-    if (!parentSr && row.sr_number) {
-      const parts = row.sr_number.split("-");
-      if (parts.length > 1) parentSr = parts.slice(0, -1).join("-");
-    }
-    if (!parentSr) return [];
-    const parent = data.find((r) => r.sr_number === parentSr);
-    if (!parent) return [];
-    const leadVal = parent.lead_team_name || parent.lead_team || "";
-    if (!leadVal) return [];
-    return [...new Set(
-      leadVal.split(/[,\/;&]+/).map((t) => t.trim()).filter(Boolean)
-    )];
-  };
-
-  // Helper: get lead_team options by parent sr_number string (for new row add)
-  const getLeadTeamOptsBySr = (parentSr: string): string[] => {
-    if (!parentSr) return [];
-    const parent = data.find((r) => r.sr_number === parentSr);
-    if (!parent) return [];
-    const leadVal = parent.lead_team_name || parent.lead_team || "";
-    if (!leadVal) return [];
-    return [...new Set(
-      leadVal.split(/[,\/;&]+/).map((t) => t.trim()).filter(Boolean)
-    )];
-  };
 
   const startEdit = (row: BPRow) => {
     setNewRow(null);
@@ -233,10 +321,31 @@ function BPTable({
 
   const saveEdit = async () => {
     if (!editingId) return;
+
+    // Sub-task ki dates apne parent task ke date-range ke andar honi chahiye
+    const currentRow = data.find((r) => r.id === editingId);
+    const parentSr = currentRow?.parent_sr;
+    const parent = parentSr ? data.find((r) => r.sr_number === parentSr) : null;
+    const newStart = editData.start_date;
+    const newEnd = editData.end_date;
+    if (parent && newStart && parent.start_date && newStart < parent.start_date) {
+      toast.error(`Start date parent task (${parent.start_date}) se pehle nahi ho sakti`);
+      return;
+    }
+    if (parent && newEnd && parent.end_date && newEnd > parent.end_date) {
+      toast.error(`End date parent task (${parent.end_date}) ke baad nahi ho sakti`);
+      return;
+    }
+    if (newStart && newEnd && newStart > newEnd) {
+      toast.error("Start date, end date se pehle honi chahiye");
+      return;
+    }
+
     setSaving(true);
     try {
       await axios.put(`/businessplan/update/${editingId}/`, editData, {
-        headers: { "X-Grade-Id": String(gradeId) },
+        headers: { "X-Grade-Id": String(gradeId), "X-Erp-Id": String(erpid) },
+        params: { section_id: sectionId, is_superuser: isSuperuser },
       });
       toast.success("Row updated!");
       setEditingId(null);
@@ -250,7 +359,7 @@ function BPTable({
     if (!window.confirm(`Delete: "${task}"?`)) return;
     try {
       await axios.delete(`/businessplan/delete/${id}/`, {
-        headers: { "X-Grade-Id": String(gradeId) },
+        headers: { "X-Grade-Id": String(gradeId), "X-Erp-Id": String(erpid) },
         params: {
           section_id: sectionId,
           is_superuser: isSuperuser,
@@ -277,7 +386,7 @@ function BPTable({
       task: "",
       start_date: "",
       end_date: "",
-      lead_team: "",
+      lead_team_id: scopeType === "own" && ownSubSection ? String(ownSubSection.id) : "",
       support_team: "",
       dependencies: "",
       deliverables: "",
@@ -289,6 +398,22 @@ function BPTable({
   const saveNewRow = async () => {
     if (!newRow) return;
     if (!newRow.task.trim()) { toast.error("Task name are required!"); return; }
+
+    // Sub-task ki dates parent task ke date-range ke andar honi chahiye
+    const parent = data.find((r) => r.sr_number === newRow.parentSr);
+    if (parent && newRow.start_date && parent.start_date && newRow.start_date < parent.start_date) {
+      toast.error(`Start date parent task (${parent.start_date}) se pehle nahi ho sakti`);
+      return;
+    }
+    if (parent && newRow.end_date && parent.end_date && newRow.end_date > parent.end_date) {
+      toast.error(`End date parent task (${parent.end_date}) ke baad nahi ho sakti`);
+      return;
+    }
+    if (newRow.start_date && newRow.end_date && newRow.start_date > newRow.end_date) {
+      toast.error("Start date, end date se pehle honi chahiye");
+      return;
+    }
+
     setSaving(true);
     try {
       await axios.post(`/businessplan/add/`, {
@@ -301,14 +426,14 @@ function BPTable({
         task: newRow.task,
         start_date: newRow.start_date || null,
         end_date: newRow.end_date || null,
-        lead_team: newRow.lead_team,
+        lead_team_id: newRow.lead_team_id || null,
         support_team: newRow.support_team,
         dependencies: newRow.dependencies,
         deliverables: newRow.deliverables,
         completion_pct: 0,
-        created_by: 0,
+        created_by: erpid,
         uploaded_by_grade: gradeId,
-      }, { headers: { "X-Grade-Id": String(gradeId) } });
+      }, { headers: { "X-Grade-Id": String(gradeId), "X-Erp-Id": String(erpid) } });
       toast.success(`${newRow.sr_number} added successfully!`);
       setNewRow(null);
       onRefresh();
@@ -387,23 +512,20 @@ function BPTable({
 
                       <td className="border border-gray-200 px-2 py-1.5 text-center text-xs">
                         {isEditing
-                          ? (() => {
-                              const parentOpts = getParentLeadTeamOptions(row);
-                              return parentOpts.length > 0 ? (
-                                <select
-                                  className={inp}
-                                  value={editData.lead_team || ""}
-                                  onChange={(e) => setEditData({ ...editData, lead_team: e.target.value })}
-                                >
-                                  <option value="">— Select Lead —</option>
-                                  {parentOpts.map((opt) => (
-                                    <option key={opt} value={opt}>{opt}</option>
-                                  ))}
-                                </select>
-                              ) : (
-                                <input className={inp} value={editData.lead_team || ""} onChange={(e) => setEditData({ ...editData, lead_team: e.target.value })} />
-                              );
-                            })()
+                          ? scopeType === "own"
+                            ? <span className="text-gray-500">{ownSubSection?.sub_section_name || "—"}</span>
+                            : (
+                              <select
+                                className={inp}
+                                value={editData.lead_team_id ?? ""}
+                                onChange={(e) => setEditData({ ...editData, lead_team_id: e.target.value ? Number(e.target.value) : null })}
+                              >
+                                <option value="">— Select Lead —</option>
+                                {subSectionOptions.map((opt) => (
+                                  <option key={opt.id} value={opt.id}>{opt.sub_section_name}</option>
+                                ))}
+                              </select>
+                            )
                           : row.lead_team_name || "—"}
                       </td>
 
@@ -448,8 +570,12 @@ function BPTable({
                             {row.level < 2 && (
                               <button onClick={() => openAddRow(row)} className="w-6 h-6 bg-green-100 text-green-700 hover:bg-green-200 rounded flex items-center justify-center text-sm font-bold" title="Add Sub Task">+</button>
                             )}
-                            <button onClick={() => startEdit(row)} className="w-6 h-6 bg-blue-100 text-blue-700 hover:bg-blue-200 rounded flex items-center justify-center text-xs" title="Edit">✏️</button>
-                            <button onClick={() => deleteRow(row.id, row.task)} className="w-6 h-6 bg-red-100 text-red-700 hover:bg-red-200 rounded flex items-center justify-center text-xs" title="Delete">🗑</button>
+                            {canModify(row) && (
+                              <>
+                                <button onClick={() => startEdit(row)} className="w-6 h-6 bg-blue-100 text-blue-700 hover:bg-blue-200 rounded flex items-center justify-center text-xs" title="Edit">✏️</button>
+                                <button onClick={() => deleteRow(row.id, row.task)} className="w-6 h-6 bg-red-100 text-red-700 hover:bg-red-200 rounded flex items-center justify-center text-xs" title="Delete">🗑</button>
+                              </>
+                            )}
                           </div>
                         )}
                       </td>
@@ -469,23 +595,20 @@ function BPTable({
                           <input type="date" className={newInp} value={newRow.end_date} onChange={(e) => setNewRow({ ...newRow, end_date: e.target.value })} />
                         </td>
                         <td className="border border-green-300 px-2 py-2">
-                          {(() => {
-                            const parentOpts = getLeadTeamOptsBySr(newRow.parentSr);
-                            return parentOpts.length > 0 ? (
+                          {scopeType === "own"
+                            ? <span className="text-xs text-gray-500 px-1">{ownSubSection?.sub_section_name || "—"}</span>
+                            : (
                               <select
                                 className={newInp}
-                                value={newRow.lead_team}
-                                onChange={(e) => setNewRow({ ...newRow, lead_team: e.target.value })}
+                                value={newRow.lead_team_id}
+                                onChange={(e) => setNewRow({ ...newRow, lead_team_id: e.target.value })}
                               >
                                 <option value="">— Select Lead —</option>
-                                {parentOpts.map((opt) => (
-                                  <option key={opt} value={opt}>{opt}</option>
+                                {subSectionOptions.map((opt) => (
+                                  <option key={opt.id} value={opt.id}>{opt.sub_section_name}</option>
                                 ))}
                               </select>
-                            ) : (
-                              <input className={newInp} placeholder="Lead" value={newRow.lead_team} onChange={(e) => setNewRow({ ...newRow, lead_team: e.target.value })} />
-                            );
-                          })()}
+                            )}
                         </td>
                         <td className="border border-green-300 px-2 py-2">
                           <input className={newInp} placeholder="Support" value={newRow.support_team} onChange={(e) => setNewRow({ ...newRow, support_team: e.target.value })} />
@@ -527,12 +650,45 @@ export default function BusinessPlanPage() {
   const erpid: number = user?.erpid ?? 0;
   const sectionId: number = user?.section_id ?? 0;
   const isSuperuser: boolean = user?.is_superuser ?? false;
-  const isAdminGrade: boolean = ADMIN_GRADES.includes(gradeId);
 
   const [data, setData] = useState<BPRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [sectionFilter, setSectionFilter] = useState("");
+  const [subSectionFilter, setSubSectionFilter] = useState(""); // sub_section id (string)
+
+  // Access-scope — ek hi call mein: scope type, apna section ka naam,
+  // aur lead-team dropdown options (ya apni khud ki sub-section, agar
+  // regular employee ho). Backend har asal data-request pe isko dobara
+  // DB se verify karta hai — ye sirf UI dikhane ke liye hai.
+  const [scopeType, setScopeType] = useState<string>("none"); // 'all' | 'section' | 'subsections' | 'own' | 'none'
+  const [scopeSectionName, setScopeSectionName] = useState<string | null>(null);
+  const [subSectionOptions, setSubSectionOptions] = useState<SubSectionOption[]>([]);
+  const [ownSubSection, setOwnSubSection] = useState<SubSectionOption | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const params = new URLSearchParams({
+          section_id: String(sectionId),
+          is_superuser: String(isSuperuser),
+        });
+        const res = await axios.get(`/businessplan/my-scope/?${params}`, {
+          headers: { "X-Grade-Id": String(gradeId), "X-Erp-Id": String(erpid) },
+        });
+        setScopeType(res.data.scope_type);
+        setScopeSectionName(res.data.section_name ?? null);
+        setSubSectionOptions(res.data.sub_sections ?? []);
+        setOwnSubSection(res.data.own_sub_section ?? null);
+      } catch {
+        setScopeType("none"); // fail-safe: uncertain hone par kuch bhi na dikhao
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Full access: superuser / grade 10,11 / grade-9 sub-section-head.
+  const isAdminAccess = scopeType === "all" || scopeType === "section" || scopeType === "subsections";
 
   const fetchData = async () => {
     setLoading(true);
@@ -541,8 +697,11 @@ export default function BusinessPlanPage() {
         grade_id: String(gradeId),
         is_superuser: String(isSuperuser),
         section_id: String(sectionId),
+        sub_section_id: subSectionFilter || "0",
       });
-      const res = await axios.get(`/businessplan/all/?${params}`);
+      const res = await axios.get(`/businessplan/all/?${params}`, {
+        headers: { "X-Grade-Id": String(gradeId), "X-Erp-Id": String(erpid) },
+      });
       setData(res.data);
     } catch {
       toast.error("There is an Error to load Data.");
@@ -551,7 +710,8 @@ export default function BusinessPlanPage() {
     }
   };
 
-  useEffect(() => { fetchData(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchData(); }, [subSectionFilter]);
 
   const sections = [...new Set(data.map((r) => r.section_name || "Unknown Section"))];
 
@@ -589,6 +749,11 @@ export default function BusinessPlanPage() {
       <PageBreadcrumb pageTitle="Business Plan" />
       <ToastContainer position="top-right" autoClose={3000} style={{ marginTop: "70px" }} />
 
+      {/* Business Plan Template — instructions + downloadable Excel template */}
+      <div className="mb-3">
+        <BusinessPlanTemplateGuide isAdminAccess={isAdminAccess} />
+      </div>
+
       {/* Excel Upload */}
       <ExcelUpload
         onUploadSuccess={fetchData}
@@ -596,6 +761,7 @@ export default function BusinessPlanPage() {
         gradeId={gradeId}
         sectionId={sectionId}
         isSuperuser={isSuperuser}
+        isAdminAccess={isAdminAccess}
       />
 
       <ComponentCard title="Business Plan">
@@ -610,8 +776,8 @@ export default function BusinessPlanPage() {
 text-xs sm:text-sm focus:outline-none focus:border-blue-500
 focus:ring-1 focus:ring-blue-100"
           />
-          {/* Section filter — sirf admin/superuser ke liye */}
-          {(isSuperuser || isAdminGrade) && (
+          {/* Section filter — sirf admin-tier (superuser/grade 10,11/grade-9 head) ke liye */}
+          {isAdminAccess && (
           <select
             value={sectionFilter}
             onChange={(e) => setSectionFilter(e.target.value)}
@@ -625,10 +791,34 @@ focus:ring-1 focus:ring-blue-100"
             ))}
           </select>
           )}
+          {/* Sub-Section filter — grade-9 head ko sirf apni headed sub-section(s),
+              grade 10/11 ko apni section ki tamam sub-sections dikhti hain */}
+          {isAdminAccess && subSectionOptions.length > 0 && (
+          <select
+            value={subSectionFilter}
+            onChange={(e) => setSubSectionFilter(e.target.value)}
+            className="w-full sm:w-auto border border-gray-300 rounded-lg px-3 py-2
+text-xs sm:text-sm focus:outline-none focus:border-blue-500
+focus:ring-1 focus:ring-blue-100"
+          >
+            <option value="">All Sub-Sections</option>
+            {subSectionOptions.map((ss) => (
+              <option key={ss.id} value={ss.id}>{ss.sub_section_name}</option>
+            ))}
+          </select>
+          )}
+          {/* Regular employee (grade 1-9, non-head) — apna section + sub-section read-only dikhta hai */}
+          {scopeType === "own" && (
+            <span className="w-full sm:w-auto px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs sm:text-sm text-gray-600">
+              📍 {scopeSectionName || "—"} <span className="mx-1 text-gray-300">/</span> {ownSubSection?.sub_section_name || "—"}
+            </span>
+          )}
           <div className="hidden sm:flex flex-1" />
+          {/* Main Task Report — sirf grade-9 section-head, grade 10/11 ya superuser ko dikhta hai */}
+          {isAdminAccess && (
           <button
             onClick={() => {
-              const url = `/business-plan/main-task-report?section_id=${sectionId}&is_superuser=${isSuperuser}`;
+              const url = `/business-plan/main-task-report?section_id=${sectionId}&is_superuser=${isSuperuser}&grade_id=${gradeId}&erp_id=${erpid}`;
               window.open(url, "_blank");
             }}
             className="w-full sm:w-auto flex items-center justify-center gap-2
@@ -637,6 +827,7 @@ text-white text-xs sm:text-sm font-semibold rounded-lg transition"
           >
             🧾 Main Task Report
           </button>
+          )}
           <button
             onClick={exportExcel}
             className="w-full sm:w-auto flex items-center justify-center gap-2
@@ -652,9 +843,9 @@ text-white text-xs sm:text-sm font-semibold rounded-lg transition"
           <div className="mb-2 text-xs text-gray-400">
             {filteredData.length} records
             {sectionFilter && ` — ${sectionFilter}`}
-            {!isSuperuser && !isAdminGrade && sectionId > 0 && (
+            {scopeType === "own" && (
               <span className="ml-2 px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full text-xs font-medium">
-                Section Filter Active
+                Sub-Section Filter Active
               </span>
             )}
           </div>
@@ -680,8 +871,13 @@ text-white text-xs sm:text-sm font-semibold rounded-lg transition"
               <BPTable
                 data={filteredData}
                 gradeId={gradeId}
+                erpid={erpid}
                 sectionId={sectionId}
                 isSuperuser={isSuperuser}
+                isAdminAccess={isAdminAccess}
+                scopeType={scopeType}
+                subSectionOptions={subSectionOptions}
+                ownSubSection={ownSubSection}
                 onRefresh={fetchData}
               />
             </div>

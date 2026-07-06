@@ -9,4 +9,5 @@ urlpatterns = [
     path('add/', views.add_row),
     path('delete-all/', views.delete_all),
     path('main-task-report/', views.get_main_task_report),
+    path('my-scope/', views.get_my_scope),
 ]

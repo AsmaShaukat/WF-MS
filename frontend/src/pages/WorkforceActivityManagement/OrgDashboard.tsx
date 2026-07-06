@@ -14,6 +14,17 @@ import {
 ═══════════════════════════════════════ */
 interface Section { id: number; name: string; }
 
+interface SubSectionOption { id: number; sub_section_name: string; }
+
+interface SubBreakdown {
+  sub_section_id:   number;
+  sub_section_name: string;
+  total_employees:  number;
+  total_activities: number;
+  total_bp_tasks:   number;
+  risks:            number;
+}
+
 interface SectionData {
   section_id:        number;
   section_name:      string;
@@ -43,8 +54,11 @@ interface DayData {
 }
 
 interface OrgData {
-  all_sections:    Section[];
-  selected_ids:    number[];
+  all_sections:          Section[];
+  selected_ids:          number[];
+  available_subsections: SubSectionOption[];
+  selected_sub_ids:      number[];
+  subsection_breakdown:  SubBreakdown[];
   sections_data:   SectionData[];
   totals:          Totals;
   seven_days:      DayData[];
@@ -170,6 +184,79 @@ function DeptDropdown({
 }
 
 /* ═══════════════════════════════════════
+   SUB-SECTION DROPDOWN (multi-select) — drill-down,
+   sirf tab dikhta hai jab EXACTLY ek department selected ho
+═══════════════════════════════════════ */
+function SubSectionDropdown({
+  options, selected, onChange,
+}: {
+  options: SubSectionOption[]; selected: number[]; onChange: (ids: number[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const toggle = (id: number) => {
+    onChange(selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id]);
+  };
+  const selectAll = () => onChange(options.map(s => s.id));
+  const clearAll  = () => onChange([]);
+
+  const label = selected.length === 0
+    ? "All Sub-Sections"
+    : selected.length === options.length
+      ? "All Sub-Sections"
+      : `${selected.length} sub-section${selected.length > 1 ? "s" : ""} selected`;
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-lg text-xs bg-white hover:border-blue-400 focus:outline-none min-w-[200px] justify-between"
+      >
+        <span className="text-blue-600">📍</span>
+        <span className="text-gray-700 flex-1 text-left">{label}</span>
+        <span className="text-gray-400">{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-50 min-w-[240px] max-h-72 overflow-y-auto">
+          <div className="flex gap-2 p-2 border-b border-gray-100">
+            <button onClick={selectAll}
+              className="flex-1 text-xs py-1 px-2 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded font-medium">
+              Select All
+            </button>
+            <button onClick={clearAll}
+              className="flex-1 text-xs py-1 px-2 bg-gray-50 text-gray-600 hover:bg-gray-100 rounded font-medium">
+              Clear
+            </button>
+          </div>
+          {options.map(s => (
+            <label key={s.id}
+              className="flex items-center gap-2 px-3 py-2 hover:bg-blue-50 cursor-pointer text-xs text-gray-700">
+              <input
+                type="checkbox"
+                checked={selected.includes(s.id)}
+                onChange={() => toggle(s.id)}
+                className="rounded accent-blue-600"
+              />
+              {s.sub_section_name}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════
    MAIN COMPONENT
 ═══════════════════════════════════════ */
 export default function OrgDashboard() {
@@ -187,22 +274,28 @@ export default function OrgDashboard() {
   const [selectedIds,  setSelectedIds]  = useState<number[]>([]);
   const [allSections,  setAllSections]  = useState<Section[]>([]);
   const [initialized,  setInitialized]  = useState(false);
+  const [availableSubs, setAvailableSubs] = useState<SubSectionOption[]>([]);
+  const [selectedSubIds, setSelectedSubIds] = useState<number[]>([]);
 
-  const fetchData = useCallback(async (secIds?: number[]) => {
+  const fetchData = useCallback(async (secIds?: number[], subIds?: number[]) => {
     if (!hasAccess) return;
     setLoading(true);
     try {
       const ids = secIds ?? selectedIds;
+      const subIdsToSend = subIds ?? selectedSubIds;
       const params = new URLSearchParams({
         grade_id:     String(gradeId),
         is_superuser: String(isSuperuser),
         date_from:    dateFrom,
         date_to:      dateTo,
         section_ids:  ids.join(','),
+        sub_section_ids: subIdsToSend.join(','),
       });
       const res = await axios.get(`/dashboard/organization/?${params}`);
       const d: OrgData = res.data;
       setData(d);
+      setAvailableSubs(d.available_subsections ?? []);
+      setSelectedSubIds(d.selected_sub_ids ?? []);
       if (!initialized) {
         setAllSections(d.all_sections);
         setSelectedIds(d.all_sections.map(s => s.id));
@@ -213,7 +306,7 @@ export default function OrgDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [hasAccess, gradeId, isSuperuser, dateFrom, dateTo, selectedIds, initialized]);
+  }, [hasAccess, gradeId, isSuperuser, dateFrom, dateTo, selectedIds, selectedSubIds, initialized]);
 
   useEffect(() => { fetchData(); }, []);
 
@@ -251,8 +344,20 @@ export default function OrgDashboard() {
         <DeptDropdown
           sections={allSections}
           selected={selectedIds}
-          onChange={setSelectedIds}
+          onChange={(ids) => {
+            setSelectedIds(ids);
+            if (ids.length !== 1) setSelectedSubIds([]); // drill-down sirf single-section view mein lagu hai
+          }}
         />
+
+        {/* Sub-Section drill-down — sirf tab dikhta hai jab EXACTLY ek department selected ho aur uski sub-sections hon */}
+        {selectedIds.length === 1 && availableSubs.length > 0 && (
+          <SubSectionDropdown
+            options={availableSubs}
+            selected={selectedSubIds}
+            onChange={setSelectedSubIds}
+          />
+        )}
 
         <div className="flex-1" />
 

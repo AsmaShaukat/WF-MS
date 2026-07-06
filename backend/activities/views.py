@@ -10,6 +10,13 @@ import datetime
 # ─────────────────────────────────────────────────────────────
 # HELPER: grade-9 head detection
 # Returns list of SubSection objects if employee is a head, else []
+#
+# NOTE: head_employee_id column stores erp_id directly (that's how
+# create_sub_section / update_sub_section write it, and how the
+# frontend compares it), even though the Django FK is technically
+# declared against Employees.id. So a plain column match is correct
+# here — do NOT traverse the relation with head_employee__erp_id,
+# since that would join against Employees.id instead.
 # ─────────────────────────────────────────────────────────────
 def _get_head_subsections(erp_id, section_id=None):
     """Return list of SubSections where erp_id is head. Empty list if not a head."""
@@ -155,16 +162,66 @@ def delete_activity(request, pk):
 
 # ─────────────────────────────────────────────────────────────
 # GET /activities/bp-tasks/
+#
+# Access rules (same spirit as get_activities_report):
+#   superuser             → sab BP tasks
+#   grade 10/11           → apne section ke SAB sub-sections ke tasks
+#   grade 9, IS head      → sirf un sub-section(s) ke tasks jinka woh head hai
+#   grade 9, NOT head     → sirf apne (employee table wale) sub_section ke tasks
+#   grade < 9             → sirf apne (employee table wale) sub_section ke tasks
+#
+# "Apne sub-section ke tasks" ka matlab: us sub-section ki L1 (level=0)
+# BusinessPlan row (lead_team = sub-section) + uske sab L2/L3 descendants —
+# taake EmpDailyActivities.tsx ki cascading L1→L2→L3 dropdown chain na tootay.
 # ─────────────────────────────────────────────────────────────
 @csrf_exempt
 def get_bp_tasks(request):
     from businessplan.models import BusinessPlan
+    from users.models import Employees
+
     section_id   = request.GET.get('section_id')
+    grade_id     = int(request.GET.get('grade_id') or 0)
     is_superuser = request.GET.get('is_superuser', 'false').lower() == 'true'
+    erp_id       = int(request.GET.get('erpid') or request.GET.get('erp_id') or 0)
 
     qs = BusinessPlan.objects.all()
     if not is_superuser and section_id and section_id != '0':
         qs = qs.filter(section_id=int(section_id))
+
+    # ── Sub-section level restriction (superuser aur grade 10/11 exempt) ──
+    if not is_superuser and grade_id not in (10, 11):
+        allowed_ss_ids = []
+
+        if grade_id == 9:
+            head_sss = _get_head_subsections(erp_id, section_id)
+            if head_sss:
+                allowed_ss_ids = [ss.id for ss in head_sss]
+
+        if not allowed_ss_ids:
+            # grade 9 (not head) ya grade < 9 → employee table wala apna sub_section
+            emp = Employees.objects.filter(erp_id=erp_id).first()
+            if emp and emp.sub_section_id:
+                allowed_ss_ids = [emp.sub_section_id]
+
+        if allowed_ss_ids:
+            # Qualifying L1 (main) tasks jinka lead_team allowed sub-sections mein hai
+            qualifying_srs = set(
+                qs.filter(level=0, lead_team_id__in=allowed_ss_ids)
+                  .values_list('sr_number', flat=True)
+            )
+
+            def root_sr(sr):
+                parts = sr.split('-')
+                return '-'.join(parts[:3]) if len(parts) >= 3 else sr
+
+            allowed_ids = [
+                t['id'] for t in qs.values('id', 'sr_number')
+                if root_sr(t['sr_number']) in qualifying_srs
+            ]
+            qs = qs.filter(id__in=allowed_ids)
+        else:
+            # Na head hai na koi sub_section assigned — security: kuch return na karo
+            qs = qs.none()
 
     tasks = qs.values('id', 'sr_number', 'task', 'start_date', 'end_date', 'completion_pct')
     return JsonResponse(list(tasks), safe=False)

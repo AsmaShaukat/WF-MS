@@ -165,12 +165,11 @@ def department_dashboard(request):
         total_activities  = acts_qs.count()
         risks_encountered = _risk_count(acts_qs)
 
-        # ── Step 5: BP Tasks (section-level, from parent sections) ──────
-        parent_section_ids = list({
-            s['section_id'] for s in allowed_subs
-            if s['id'] in set(selected_sub_ids)
-        })
-        bp_qs = BusinessPlan.objects.filter(section_id__in=parent_section_ids)
+        # ── Step 5: BP Tasks — scoped to the SELECTED sub-section(s)
+        #    (lead_team), not the whole parent section. Pehle ye galti se
+        #    section_id se filter karta tha, is liye 1 sub-section select
+        #    karne par bhi poori section ke tasks dikh rahe the.
+        bp_qs = BusinessPlan.objects.filter(lead_team_id__in=selected_sub_ids)
         total_bp_tasks, completed_tasks, inprogress_tasks, not_started, avg_completion = _bp_stats(bp_qs)
 
         # ── Step 6: 7-Day chart ──────────────────────────────────────────
@@ -250,6 +249,9 @@ def org_dashboard(request):
     date_to      = request.GET.get('date_to',   str(date.today()))
     # Comma separated section ids: "1,3,7"
     section_ids_param = request.GET.get('section_ids', '')
+    # Comma separated sub-section ids — sirf tab lagu hote hain jab EXACTLY
+    # ek section select ho (drill-down view)
+    sub_section_ids_param = request.GET.get('sub_section_ids', '')
     allowed_grades = [10, 11]
  
     # Access check
@@ -259,6 +261,7 @@ def org_dashboard(request):
     try:
         from users.models import Employees
         from sections.models import Sections
+        from subsections.models import SubSection
         from activities.models import EmployeeActivity
         from businessplan.models import BusinessPlan
  
@@ -274,6 +277,25 @@ def org_dashboard(request):
  
         # Selected sections ki details
         selected_sections = [s for s in all_sections if s['id'] in selected_ids]
+
+        # ─── Sub-Section drill-down ──────────────────────────────────────
+        # Sirf tab available hota hai jab EXACTLY ek department/section
+        # selected ho — us section ki sab sub-sections dropdown mein dikhengi.
+        available_subsections = []
+        selected_sub_ids = []
+        if len(selected_ids) == 1:
+            available_subsections = list(
+                SubSection.objects.filter(section_id=selected_ids[0])
+                .values('id', 'sub_section_name')
+                .order_by('sub_section_name')
+            )
+            valid_sub_ids = {s['id'] for s in available_subsections}
+            if sub_section_ids_param:
+                requested_sub_ids = [
+                    int(x) for x in sub_section_ids_param.split(',') if x.strip().isdigit()
+                ]
+                # Security: sirf usi section ki apni sub-sections allowed hain
+                selected_sub_ids = [sid for sid in requested_sub_ids if sid in valid_sub_ids]
  
         # ─── Per-Section Data ─────────────────────────────────────────────
         sections_data = []
@@ -294,12 +316,21 @@ def org_dashboard(request):
             sec_id   = section['id']
             sec_name = section['name']
  
-            # Employees in this section
-            emp_erpids = list(
-                Employees.objects.filter(
-                    section_id=sec_id
-                ).values_list('erp_id', flat=True)
-            )
+            # Employees in this section (ya, agar drill-down active hai,
+            # sirf selected sub-section(s) ke employees)
+
+            if selected_sub_ids:
+                emp_erpids = list(
+                    Employees.objects.filter(
+                        sub_section_id__in=selected_sub_ids
+                    ).values_list('erp_id', flat=True)
+                )
+            else:
+                emp_erpids = list(
+                    Employees.objects.filter(
+                        section_id=sec_id
+                    ).values_list('erp_id', flat=True)
+                )
             emp_count = len(emp_erpids)
  
             # Activities
@@ -313,8 +344,12 @@ def org_dashboard(request):
                 risk_comment__isnull=True
             ).exclude(risk_comment='').exclude(risk_comment='—').count()
  
-            # BP Tasks
-            bp_qs = BusinessPlan.objects.filter(section_id=sec_id)
+            # BP Tasks — sub-section (lead_team) se scoped agar drill-down active hai,
+            # warna poori section
+            if selected_sub_ids:
+                bp_qs = BusinessPlan.objects.filter(lead_team_id__in=selected_sub_ids)
+            else:
+                bp_qs = BusinessPlan.objects.filter(section_id=sec_id)
             bp_total   = bp_qs.count()
             bp_done    = bp_qs.filter(completion_pct=100).count()
             bp_prog    = bp_qs.filter(completion_pct__gt=0, completion_pct__lt=100).count()
@@ -353,12 +388,20 @@ def org_dashboard(request):
         if total_bp_for_avg > 0:
             totals['avg_completion'] = round(total_pct_sum / total_bp_for_avg, 1)
  
-        # ─── 7-Day Overview (all selected sections) ───────────────────────
-        all_erpids = list(
-            Employees.objects.filter(
-                section_id__in=selected_ids
-            ).values_list('erp_id', flat=True)
-        )
+        # ─── 7-Day Overview (selected sections, ya selected sub-section(s)
+        #     agar drill-down active hai) ───────────────────────────────
+        if selected_sub_ids:
+            all_erpids = list(
+                Employees.objects.filter(
+                    sub_section_id__in=selected_sub_ids
+                ).values_list('erp_id', flat=True)
+            )
+        else:
+            all_erpids = list(
+                Employees.objects.filter(
+                    section_id__in=selected_ids
+                ).values_list('erp_id', flat=True)
+            )
  
         seven_days = []
         for i in range(6, -1, -1):
@@ -377,6 +420,31 @@ def org_dashboard(request):
                 'activities': day_qs.count(),
                 'risks':      day_risks,
             })
+
+        # ─── Sub-Section breakdown (sirf jab exactly ek section selected ho) ──
+        subsection_breakdown = []
+        if len(selected_ids) == 1 and available_subsections:
+            breakdown_ids = selected_sub_ids if selected_sub_ids else [s['id'] for s in available_subsections]
+            for ss in available_subsections:
+                if ss['id'] not in breakdown_ids:
+                    continue
+                ss_erpids = list(
+                    Employees.objects.filter(sub_section_id=ss['id']).values_list('erp_id', flat=True)
+                )
+                ss_acts = EmployeeActivity.objects.filter(
+                    erp_id__in=ss_erpids, activity_date__gte=date_from, activity_date__lte=date_to
+                )
+                ss_bp = BusinessPlan.objects.filter(lead_team_id=ss['id'])
+                subsection_breakdown.append({
+                    'sub_section_id':   ss['id'],
+                    'sub_section_name': ss['sub_section_name'],
+                    'total_employees':  len(ss_erpids),
+                    'total_activities': ss_acts.count(),
+                    'total_bp_tasks':   ss_bp.count(),
+                    'risks': ss_acts.exclude(
+                        risk_comment__isnull=True
+                    ).exclude(risk_comment='').exclude(risk_comment='—').count(),
+                })
  
         # ─── Department Comparison Chart data ────────────────────────────
         dept_comparison = [
@@ -394,8 +462,11 @@ def org_dashboard(request):
         ]
  
         return JsonResponse({
-            'all_sections':    all_sections,
-            'selected_ids':    selected_ids,
+            'all_sections':          all_sections,
+            'selected_ids':          selected_ids,
+            'available_subsections': available_subsections,
+            'selected_sub_ids':      selected_sub_ids,
+            'subsection_breakdown':  subsection_breakdown,
             'sections_data':   sections_data,
             'totals':          totals,
             'seven_days':      seven_days,

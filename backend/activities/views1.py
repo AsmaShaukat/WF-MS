@@ -1,8 +1,10 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.db.models import F
+from django.utils import timezone
 from .models import EmployeeActivity
 import json
+import datetime
 
 
 # ─────────────────────────────────────────────────────────────
@@ -360,6 +362,125 @@ def get_sub_sections(request):
 
         data = list(ss_qs.values('id', 'sub_section_name', 'head_employee_id', 'section_id'))
         return JsonResponse(data, safe=False)
+
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+# ─────────────────────────────────────────────────────────────
+# GET /activities/attendance-report/
+#
+# "Kis section ke kitne aur konse employees ne aaj activity
+# enter ki aur kin ne nahi ki" — sirf section-head (grade-9 head),
+# grade-10/11 aur superuser ke liye. Individual employee (jo kisi
+# sub_section ka head nahi hai) is endpoint se sirf apna data
+# dekh sakta hai — usko frontend button hi show nahi hota, lekin
+# yahan bhi wahi access-scope re-use kiya gaya hai jo
+# get_sub_sections / get_section_employees mein hai, taake
+# endpoint URL directly hit karke koi doosre section ka data na
+# nikaal sake.
+#
+# Query params:
+#   section_id, grade_id, is_superuser, erp_id   (same as baaki endpoints)
+#   date   (YYYY-MM-DD, optional — default aaj ki date)
+#
+# Response: list of sub_sections, har ek ke andar employees ki
+# list with 'active' flag (aaj/selected date activity submit ki
+# ya nahi) + active/inactive counts.
+# ─────────────────────────────────────────────────────────────
+@csrf_exempt
+def get_attendance_report(request):
+    section_id   = request.GET.get('section_id')
+    grade_id     = int(request.GET.get('grade_id', 0))
+    is_superuser = request.GET.get('is_superuser', 'false').lower() == 'true'
+    erp_id       = int(request.GET.get('erp_id', 0))
+    date_str     = request.GET.get('date')
+
+    # Resolve target date (default: today)
+    if date_str:
+        try:
+            target_date = datetime.datetime.strptime(date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return JsonResponse({'error': 'Invalid date format, expected YYYY-MM-DD'}, status=400)
+    else:
+        target_date = timezone.localdate()
+
+    try:
+        from subsections.models import SubSection
+        from users.models import Employees
+
+        # ── Determine which sub_sections this user is allowed to see ──
+        if is_superuser:
+            ss_qs = SubSection.objects.all()
+
+        elif grade_id in [10, 11]:
+            if section_id and section_id != '0':
+                ss_qs = SubSection.objects.filter(section_id=int(section_id))
+            else:
+                ss_qs = SubSection.objects.none()
+
+        elif grade_id == 9:
+            head_sss = _get_head_subsections(erp_id, section_id)
+            ss_qs = SubSection.objects.filter(pk__in=[ss.id for ss in head_sss]) if head_sss else SubSection.objects.none()
+
+        else:
+            # Individual employee (not a head) — no team to report on
+            ss_qs = SubSection.objects.none()
+
+        sub_sections = list(ss_qs.values('id', 'sub_section_name'))
+
+        if not sub_sections:
+            return JsonResponse({'date': str(target_date), 'sections': []}, safe=False)
+
+        ss_ids = [ss['id'] for ss in sub_sections]
+
+        # ── All employees belonging to these sub_sections ──
+        employees = list(
+            Employees.objects.filter(sub_section_id__in=ss_ids)
+            .values('erp_id', 'name', 'sub_section_id')
+        )
+        all_erp_ids = [e['erp_id'] for e in employees]
+
+        # ── Who submitted an activity on target_date ──
+        active_erp_ids = set(
+            EmployeeActivity.objects
+            .filter(erp_id__in=all_erp_ids, activity_date=target_date)
+            .values_list('erp_id', flat=True)
+            .distinct()
+        )
+
+        # ── Group employees by sub_section ──
+        emp_by_ss = {}
+        for e in employees:
+            emp_by_ss.setdefault(e['sub_section_id'], []).append(e)
+
+        sections_out = []
+        for ss in sub_sections:
+            ss_employees = emp_by_ss.get(ss['id'], [])
+            emp_list = []
+            active_count = 0
+            for e in ss_employees:
+                is_active = e['erp_id'] in active_erp_ids
+                if is_active:
+                    active_count += 1
+                emp_list.append({
+                    'erp_id': e['erp_id'],
+                    'name':   e['name'],
+                    'active': is_active,
+                })
+            # Sort: inactive first (jinhe attention chahiye), phir active
+            emp_list.sort(key=lambda x: (x['active'], x['name'] or ''))
+
+            sections_out.append({
+                'sub_section_id':   ss['id'],
+                'sub_section_name': ss['sub_section_name'],
+                'total_count':      len(ss_employees),
+                'active_count':     active_count,
+                'inactive_count':   len(ss_employees) - active_count,
+                'employees':        emp_list,
+            })
+
+        return JsonResponse({'date': str(target_date), 'sections': sections_out}, safe=False)
 
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
