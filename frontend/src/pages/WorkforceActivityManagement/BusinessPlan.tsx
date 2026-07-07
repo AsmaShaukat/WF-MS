@@ -98,7 +98,7 @@ text-white text-xs sm:text-sm font-semibold rounded-lg transition"
       </button>
 
       {open && createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 p-4 pt-24 overflow-y-auto">
+        <div className="fixed inset-0 z-[9999] flex items-start justify-center bg-black/60 p-4 pt-24 overflow-y-auto">
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700 shrink-0">
               <h3 className="text-base font-semibold text-gray-800 dark:text-gray-100">How to create your Business Plan Excel file</h3>
@@ -118,7 +118,7 @@ text-white text-xs sm:text-sm font-semibold rounded-lg transition"
                   <li><b>section_id</b> — The numeric ID of your section. Leave it as your own section's ID unless you manage more than one section.</li>
                   <li><b>task</b> — A short, clear description of the task.</li>
                   <li><b>start_date</b> and <b>end_date</b> — Use the format <code>YYYY-MM-DD</code> (e.g. 2026-01-31). A sub-task's dates must fall within its parent task's date range.</li>
-                  <li><b>lead_team</b> — The name of the sub-section responsible for this task (e.g. "DPC"). You may also use the sub-section's numeric ID instead of its name.</li>
+                  <li><b>lead_team</b> — <b>Required.</b> The name of the sub-section responsible for this task (e.g. "DPC"). You may also use the sub-section's numeric ID instead of its name. A row without a valid Lead Team will be rejected.</li>
                   <li><b>support_team</b>, <b>dependencies</b>, <b>deliverables</b> — Free text, optional.</li>
                   <li><b>level</b> — <code>0</code> for a main task, <code>1</code> for a sub-task, <code>2</code> for a sub-sub-task.</li>
                   <li><b>parent_sr</b> — The sr_number of the parent task. Leave this empty for a main task (level 0).</li>
@@ -132,6 +132,7 @@ text-white text-xs sm:text-sm font-semibold rounded-lg transition"
                   <li>A sub-task's start and end dates must be inside its parent task's date range — not before the parent starts, and not after the parent ends.</li>
                   <li>If a row's sr_number already exists in the system, that row will be skipped when you upload (it will not overwrite existing data).</li>
                   <li>If you are a sub-section head, you can only upload tasks for the sub-section(s) you head — rows for other sub-sections will be skipped.</li>
+                  <li>Every row must have a valid Lead Team — rows with a missing or unrecognised Lead Team will not be imported.</li>
                 </ul>
               </div>
 
@@ -212,7 +213,7 @@ function ExcelUpload({
       await axios.delete(`/businessplan/delete-all/?is_superuser=${isSuperuser}&section_id=${sectionId}`, {
         headers: { "X-Grade-Id": String(gradeId), "X-Erp-Id": String(erpid) },
       });
-      toast.success("Poora Business Plan delete ho gaya!");
+      toast.success("The entire Business Plan has been deleted!");
       onUploadSuccess();
     } catch (err: any) {
       toast.error(err?.response?.data?.error || "Delete failed");
@@ -322,6 +323,11 @@ function BPTable({
   const saveEdit = async () => {
     if (!editingId) return;
 
+    if (scopeType !== "own" && !editData.lead_team_id) {
+      toast.error("Lead Team is required — this field cannot be left empty");
+      return;
+    }
+
     // Sub-task ki dates apne parent task ke date-range ke andar honi chahiye
     const currentRow = data.find((r) => r.id === editingId);
     const parentSr = currentRow?.parent_sr;
@@ -329,15 +335,15 @@ function BPTable({
     const newStart = editData.start_date;
     const newEnd = editData.end_date;
     if (parent && newStart && parent.start_date && newStart < parent.start_date) {
-      toast.error(`Start date parent task (${parent.start_date}) se pehle nahi ho sakti`);
+      toast.error(`Start date cannot be earlier than the parent task's start date (${parent.start_date})`);
       return;
     }
     if (parent && newEnd && parent.end_date && newEnd > parent.end_date) {
-      toast.error(`End date parent task (${parent.end_date}) ke baad nahi ho sakti`);
+      toast.error(`End date cannot be later than the parent task's end date (${parent.end_date})`);
       return;
     }
     if (newStart && newEnd && newStart > newEnd) {
-      toast.error("Start date, end date se pehle honi chahiye");
+      toast.error("End date cannot be later than the parent task'sStart date must be earlier than the end date end date (${parent.end_date})");
       return;
     }
 
@@ -398,6 +404,10 @@ function BPTable({
   const saveNewRow = async () => {
     if (!newRow) return;
     if (!newRow.task.trim()) { toast.error("Task name are required!"); return; }
+    if (scopeType !== "own" && !newRow.lead_team_id) {
+      toast.error("Lead Team is required — this field cannot be left empty");
+      return;
+    }
 
     // Sub-task ki dates parent task ke date-range ke andar honi chahiye
     const parent = data.find((r) => r.sr_number === newRow.parentSr);
@@ -410,7 +420,7 @@ function BPTable({
       return;
     }
     if (newRow.start_date && newRow.end_date && newRow.start_date > newRow.end_date) {
-      toast.error("Start date, end date se pehle honi chahiye");
+      toast.error("Start date must be earlier than the end date");
       return;
     }
 

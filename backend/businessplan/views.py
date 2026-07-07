@@ -144,16 +144,16 @@ def validate_date_range(start_date, end_date, parent_sr):
     end = _to_date(end_date)
 
     if start and end and start > end:
-        return "Start date, end date se pehle honi chahiye"
+        return "Start date must be earlier than the end date"
 
     if parent_sr:
         parent = BusinessPlan.objects.filter(sr_number=parent_sr).values('start_date', 'end_date').first()
         if parent:
             p_start, p_end = parent['start_date'], parent['end_date']
             if start and p_start and start < p_start:
-                return f"Start date parent task ki start date ({p_start}) se pehle nahi ho sakti"
+                return f"Start date cannot be earlier than the parent task's start date ({p_start})"
             if end and p_end and end > p_end:
-                return f"End date parent task ki end date ({p_end}) ke baad nahi ho sakti"
+                return f"End date cannot be later than the parent task's end date ({p_end})"
 
     return None
 
@@ -261,7 +261,7 @@ def upload_excel(request):
         scope = get_bp_scope(grade, erpid, is_superuser, user_sec_id)
         if scope['type'] not in ('all', 'section', 'subsections'):
             return JsonResponse(
-                {'error': 'Permission denied — sirf section head (grade 9), grade 10/11 ya superuser Excel upload kar sakte hain'},
+                {'error': 'Permission denied — only section heads (grade 9), grade 10/11, or superusers can upload Excel files'},
                 status=403
             )
 
@@ -305,15 +305,21 @@ def upload_excel(request):
             level   = int(row[9] or 0)
             parent  = str(row[10]).strip() if len(row) > 10 and row[10] else None
 
-            # lead_team ko sub_sections table se validate karo (optional, soft-fail)
-            lead_team_obj, found = resolve_lead_team(lead) if lead else (None, True)
-            if lead and not found:
-                skipped_lead += 1  # match nahi mila — row phir bhi save hogi
+            # lead_team ab MANDATORY hai — na khali reh sakta hai, na
+            # unresolved. Naam se pehle, phir ID se try hota hai (resolve_lead_team);
+            # dono fail hon to row REJECT hoti hai, NULL save nahi hoti.
+            if not lead:
+                skipped_lead += 1  # lead_team column khali tha
+                continue
+            lead_team_obj, found = resolve_lead_team(lead)
+            if not found:
+                skipped_lead += 1  # naam/ID kisi se bhi match nahi hua
+                continue
 
             # Grade-9 sub-section-head sirf apni headed subsection(s) ke against
             # rows upload kar sakta hai — kisi doosri subsection ka lead_team ho
             # to wo row skip ho jayegi (add_row jaisi hi restriction, consistent)
-            if scope['type'] == 'subsections' and lead_team_obj and lead_team_obj.id not in scope['ids']:
+            if scope['type'] == 'subsections' and lead_team_obj.id not in scope['ids']:
                 skipped_lead_scope += 1
                 continue
 
@@ -382,26 +388,32 @@ def add_row(request):
             section_id = int(user_section_id) if user_section_id else None
 
         # lead_team validate karo sub_sections se — naam (dropdown se aata hai) ya id, dono chalte hain
+        # Lead Team ab MANDATORY hai — koi bhi task bina Lead Team ke save nahi ho sakta.
         lead_team_value = data.get('lead_team_id') or data.get('lead_team')
+        if not lead_team_value:
+            # Normal employee (scope 'own') ke liye apni sub-section automatically
+            # use ho jati hai — unhe manually select karne ki zaroorat nahi
+            if scope['type'] == 'own':
+                lead_team_value = scope['sub_section_id']
+            else:
+                return JsonResponse({'error': 'Lead Team is required — a task cannot be saved without it'}, status=400)
+
         lead_team_obj, found = resolve_lead_team(lead_team_value)
         if not found:
             return JsonResponse(
-                {'error': f'lead_team "{lead_team_value}" sub_sections table mein nahi mila'},
+                {'error': f'Lead Team "{lead_team_value}" was not found in the sub-sections table'},
                 status=400
             )
 
         # Normal employee (scope 'own') sirf apni khud ki sub-section ko lead_team assign kar sakta hai
-        if scope['type'] == 'own':
-            if lead_team_obj is None:
-                lead_team_obj, _ = resolve_lead_team(str(scope['sub_section_id']))  # default: apni sub-section
-            elif lead_team_obj.id != scope['sub_section_id']:
-                return JsonResponse(
-                    {'error': 'Aap sirf apni khud ki sub-section ke against task add kar sakte hain'},
-                    status=403
-                )
-        elif scope['type'] == 'subsections' and lead_team_obj and lead_team_obj.id not in scope['ids']:
+        if scope['type'] == 'own' and lead_team_obj.id != scope['sub_section_id']:
             return JsonResponse(
-                {'error': 'Aap sirf apni headed sub-section(s) ke against task add kar sakte hain'},
+                {'error': 'You can only add tasks against your own sub-section'},
+                status=403
+            )
+        elif scope['type'] == 'subsections' and lead_team_obj.id not in scope['ids']:
+            return JsonResponse(
+                {'error': 'You can only add tasks against the sub-section(s) you head'},
                 status=403
             )
 
@@ -448,7 +460,7 @@ def update_row(request, pk):
 
         scope = get_bp_scope(grade, erpid, is_superuser, user_sec_id)
         if not can_modify_row(bp, scope, erpid):
-            return JsonResponse({'error': 'Permission denied — ye task aapki scope mein nahi hai'}, status=403)
+            return JsonResponse({'error': 'Permission denied — this task is outside your access scope'}, status=403)
 
         bp.task           = data.get('task', bp.task)
         bp.start_date     = data.get('start_date') or bp.start_date
@@ -459,12 +471,15 @@ def update_row(request, pk):
         bp.completion_pct = data.get('completion_pct', bp.completion_pct)
 
         # lead_team update — sub_sections se validate (naam ya id, dono chalte hain)
+        # Lead Team mandatory hai — ise khali/clear nahi kiya ja sakta.
         if 'lead_team_id' in data or 'lead_team' in data:
             lead_team_value = data.get('lead_team_id') or data.get('lead_team')
+            if not lead_team_value:
+                return JsonResponse({'error': 'Lead Team is required — this field cannot be left empty'}, status=400)
             lead_team_obj, found = resolve_lead_team(lead_team_value)
             if not found:
                 return JsonResponse(
-                    {'error': f'lead_team "{lead_team_value}" sub_sections table mein nahi mila'},
+                    {'error': f'Lead Team "{lead_team_value}" was not found in the sub-sections table'},
                     status=400
                 )
             bp.lead_team = lead_team_obj
@@ -552,7 +567,7 @@ def delete_row(request, pk):
         scope = get_bp_scope(grade, erpid, is_superuser, user_section_id)
         if not can_modify_row(bp, scope, erpid):
             return JsonResponse(
-                {'error': 'Permission denied — ye task aapki scope mein nahi hai'},
+                {'error': 'Permission denied — this task is outside your access scope'},
                 status=403
             )
 
@@ -565,8 +580,8 @@ def delete_row(request, pk):
             return JsonResponse(
                 {
                     'error': (
-                        'Delete nahi ho sakta — is task ya uske child tasks ke '
-                        'against employee activities exist karti hain'
+                        'Cannot delete — this task or its child tasks already '
+                        'have employee activities logged against them'
                     )
                 },
                 status=400
@@ -752,7 +767,7 @@ def delete_all(request):
 
         if EmployeeActivity.objects.filter(bp_task_id__in=target_ids).exists():
             return JsonResponse(
-                {'error': 'Delete nahi ho sakta — kuch tasks ke against employee activities exist karti hain. Pehle activities delete karen.'},
+                {'error': 'Cannot delete — some tasks already have employee activities logged against them. Please delete those activities first.'},
                 status=400
             )
 
