@@ -66,23 +66,31 @@ export default function MainTaskReport() {
   const [params] = useSearchParams();
   const sectionId = params.get("section_id") || "0";
   const isSuperuser = params.get("is_superuser") || "false";
+  const gradeId = params.get("grade_id") || "0";
+  const erpId = params.get("erp_id") || "0";
 
   const [data, setData] = useState<MainTaskReportRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [search, setSearch] = useState("");
+  const [denied, setDenied] = useState(false);
 
   const fetchReport = async () => {
     setLoading(true);
     try {
       const res = await axios.get(
-        `/businessplan/main-task-report/?section_id=${sectionId}&is_superuser=${isSuperuser}`
+        `/businessplan/main-task-report/?section_id=${sectionId}&is_superuser=${isSuperuser}&grade_id=${gradeId}&erp_id=${erpId}`,
+        { headers: { "X-Grade-Id": gradeId, "X-Erp-Id": erpId } }
       );
       setData(res.data);
       // By default, expand all main tasks so the full detail is visible
       setExpandedIds(new Set(res.data.map((r: MainTaskReportRow) => r.id)));
-    } catch {
-      toast.error("Report load karne mein masla hua.");
+    } catch (err: any) {
+      if (err?.response?.status === 403) {
+        setDenied(true);
+      } else {
+        toast.error("Report load karne mein masla hua.");
+      }
     } finally {
       setLoading(false);
     }
@@ -169,6 +177,21 @@ export default function MainTaskReport() {
     XLSX.writeFile(wb, "main_task_report.xlsx");
   };
 
+  if (denied) {
+    return (
+      <>
+        <PageMeta title="Main Task Report — ISMO" description="Comprehensive Main Task Progress Report" />
+        <PageBreadcrumb pageTitle="Main Task Report" />
+        <ComponentCard title="Main Task — Comprehensive Progress Report">
+          <div className="text-center py-16 text-gray-400">
+            <p className="text-lg font-medium text-gray-500">🚫 Access Denied</p>
+            <p className="text-sm mt-1">This Report is only accessible to section-heads (grade 9), grade 10/11 users, and superusers.</p>
+          </div>
+        </ComponentCard>
+      </>
+    );
+  }
+
   return (
     <>
       <PageMeta title="Main Task Report — ISMO" description="Comprehensive Main Task Progress Report" />
@@ -239,7 +262,7 @@ text-white text-xs sm:text-sm font-semibold rounded-lg transition"
                   {expanded && (
                     <div className="p-3 bg-white">
                       {main.sub_tasks.length === 0 && main.employees.length === 0 ? (
-                        <p className="text-xs text-gray-400 px-2 py-3">Is main task ke koi sub-tasks nahi hain.</p>
+                        <p className="text-xs text-gray-400 px-2 py-3">This main task has no sub-tasks.</p>
                       ) : (
                         <div className="overflow-x-auto">
                           <table className="w-full border-collapse text-xs">
@@ -293,7 +316,7 @@ text-white text-xs sm:text-sm font-semibold rounded-lg transition"
                                       </>
                                     ) : (
                                       <td className="border border-gray-200 px-2 py-1.5 text-center text-gray-400" colSpan={4}>
-                                        Koi activity log nahi hui
+                                        No activity logs found
                                       </td>
                                     )}
                                   </tr>
